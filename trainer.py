@@ -138,7 +138,7 @@ class Trainer:
             
             
             outputs = ModelOutput(**outputs)
-            logits, labels,loss = outputs.hr_logits,outputs.tr_logits, outputs.labels,outputs.loss
+            logits, labels,loss = outputs.hr_logits, outputs.labels,outputs.loss
             losses.update(loss.item(), batch_size)
 
             acc1, acc3 = accuracy(logits, labels, topk=(1, 3))
@@ -162,7 +162,7 @@ class Trainer:
         
         progress = ProgressMeter(
             len(self.train_loader),
-            [losses, inv_t, R_top1, R_top3,L_top1, L_top3],
+            [losses, inv_t, R_top1, R_top3],
             prefix="Epoch: [{}]".format(epoch))
        
         epoch_iterator = tqdm(self.train_loader,desc="Iteration-{})".format(epoch),leave=False,position=0)
@@ -182,7 +182,7 @@ class Trainer:
                 
 
             outputs = ModelOutput(**outputs)
-            hr_logits,labels,loss = outputs.hr_logits,outputs.tr_logits,outputs.labels, outputs.loss
+            hr_logits,labels,loss = outputs.hr_logits,outputs.labels, outputs.loss
             assert hr_logits.size(0) == batch_size
 
             acc1, acc3 = accuracy(hr_logits, labels, topk=(1, 3))

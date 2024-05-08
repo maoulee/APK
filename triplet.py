@@ -3,7 +3,6 @@ import json
 import networkx as nx
 import networkit as nk
 import numpy as np
-import faiss
 import torch
 from typing import List
 from dataclasses import dataclass
@@ -334,7 +333,7 @@ class LinkGraph:
                         if len(seen_eids) > max_nodes:
                             return set()
         return set([entity_dict.entity_to_idx(e_id) for e_id in seen_eids])
-'''
+
 class TripletDict:
     def __init__(self, path_list: List[str]):
         self.path_list = path_list
@@ -394,7 +393,7 @@ class TripletDict:
 
     def get_pagerank_score(self, h: str) -> set:
         return self.pagerank_score.get((h), 0)
-'''
+
 
 def reverse_triplet(obj):
     return {

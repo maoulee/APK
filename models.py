@@ -7,6 +7,8 @@ from torch.utils.data import Dataset, DataLoader, TensorDataset, SequentialSampl
 from dataclasses import dataclass
 from transformers import AutoModel, AutoConfig
 from config import args
+from bert_prompt import BertModelForLayerwise
+from analogical_prompter import Prompter
 
 def build_model(args) -> nn.Module:
     return CustomBertModel(args)
@@ -25,19 +27,16 @@ class CustomBertModel(nn.Module, ABC):
         super().__init__()
         self.args = args
         self.config = AutoConfig.from_pretrained(args.pretrained_model)
+        self.config.checkpoint=True
         self.log_inv_t = torch.nn.Parameter(torch.tensor([args.t]), requires_grad=args.finetune_t)
         self.add_margin = args.additive_margin
         self.batch_size = args.batch_size
-        self.hr_bert = AutoModel.from_pretrained(args.pretrained_model)
+        self.hr_bert = BertModelForLayerwise.from_pretrained(args.pretrained_model)
         self.tail_bert = deepcopy(self.hr_bert)
         self.hr_bert.gradient_checkpointing_enable()
         self.tail_bert.gradient_checkpointing_enable()
-        self.rel_proj_vec=nn.Embedding(args.num_rel, 768)
-        
-        self.classfier=nn.Linear(self.config.hidden_size, args.num_rel)
-        
-        self.gate_example=nn.Sequential(nn.Linear(768, 768))
-        self.gate_query = nn.Sequential(nn.Linear(768, 768))
+        self.prompter=Prompter(self.config,self.config.hidden_size,self.args.ans)
+
 
         
 
@@ -53,31 +52,7 @@ class CustomBertModel(nn.Module, ABC):
         return cls_output
     
     
-    def _encode_triple(self, encoder, token_ids, mask, token_type_ids):
-        outputs = encoder(input_ids=token_ids,
-                          attention_mask=mask,
-                          token_type_ids=token_type_ids,
-                          return_dict=True)
-
-        dim_idx, mask_idx = (token_ids == torch.tensor([102]).long().cuda()).nonzero(as_tuple=True)
-        last_hidden_state = outputs.last_hidden_state
-        mask_idx = mask_idx.reshape(token_ids.shape[0], -1)
-        slices = []
-        for i in range(mask_idx.shape[0]):
-            # 将第一个切片的始末分别设置为 0 和索引数组的第一个元素。
-            starts = torch.cat([torch.tensor([1]).cuda(), mask_idx[i, :-1]])
-            ends = mask_idx[i, :]
-
-            # 根据切片的起始和结束位置对原数组切片，并将切片相加。
-            slices.append(torch.stack(
-                [last_hidden_state[i, start:end, :].mean(dim=0) for start, end in zip(starts, ends)]
-            ))
-        cls_output = torch.stack(slices, dim=0)
-        head = cls_output[:, 0, :].squeeze()
-        rel = cls_output[:, 1, :].squeeze()
-        head=nn.functional.normalize(head,dim=1)
-        rel=nn.functional.normalize(rel,dim=1)
-        return head, rel
+   
     
     def _encode_rel(self, encoder, token_ids, mask, token_type_ids):
         outputs = encoder(input_ids=token_ids,
@@ -92,15 +67,7 @@ class CustomBertModel(nn.Module, ABC):
         cls_output = _pool_output( mask, last_hidden_state)
         return output,cls_output
     
-    def get_input_emb(self,encoder, token_ids,anoalogy_rel):
-        word_emb=encoder.embeddings.word_embeddings(token_ids)
-        dim_idx, mask_idx = (token_ids == torch.tensor([101]).long().cuda()).nonzero(as_tuple=True)
-        mask_idx = mask_idx.reshape(token_ids.shape[0], -1)
-        for i in range(mask_idx.shape[0]):
-            idx = mask_idx[i]
-            word_emb[i,  idx[0], :]=anoalogy_rel[i]
-            
-        return word_emb
+   
     
     def anoalogy_agg_fuc(self,anoalogy_rel,ans_value):
 
@@ -109,25 +76,26 @@ class CustomBertModel(nn.Module, ABC):
         weighted_tensor = agg_rel * ans_value
         weighted_tensor=weighted_tensor.sum(dim=1)
         return weighted_tensor
+
     
-    def _encode_prompt(self, encoder, token_ids=None, mask=None, token_type_ids=None, input_emb=None):
-        outputs = encoder(attention_mask=mask,
-                              token_type_ids=token_type_ids,
-                              inputs_embeds=input_emb,
+    def _encode_an(self, encoder, token_ids=None, mask=None, token_type_ids=None, input_emb=None):
+        prompt_attention_mask = torch.ones(input_emb.size(0), self.args.ans).type_as(mask)
+       # prompt_token_type_ids = torch.ones(input_emb.size(0), 10).type_as(mask)
+        mask = torch.cat((mask,prompt_attention_mask), dim=1)
+       # token_type_ids= torch.cat((token_type_ids,prompt_token_type_ids), dim=1)
+        outputs = encoder(input_ids=token_ids,
+                          attention_mask=mask,
+                          token_type_ids=token_type_ids,
+                          layerwise_prompt=input_emb,
                               return_dict=True)
         
             
         last_hidden_state = outputs.last_hidden_state
         cls_output = _pool_output( mask, last_hidden_state)
-        return cls_output\
+        return cls_output
     
     
-    def gate_fusion(self,example,query):
-        gate_emb=self.gate_example(example)+self.gate_query(query)
-        gate= torch.sigmoid(gate_emb)
-        fusion_emb=query*gate+(1-gate)*example
-        return fusion_emb
-   
+ 
 
     def forward(self, hr_token_ids, hr_mask, hr_token_type_ids,
                 ans_triple_token_ids,ans_triple_mask,ans_triple_token_type_ids,
@@ -166,30 +134,16 @@ class CustomBertModel(nn.Module, ABC):
                                         token_type_ids=ans_triple_token_type_ids)
             
             
-            
+            ans_rel=ans_rel.reshape([hr_vector.size(0),-1,768])
             ans_rel_agg=self.anoalogy_agg_fuc(ans_rel,kwargs['ans_value'])
-            
-            
-            input_emb=self.get_input_emb(self.hr_bert,ans_head_token_ids,ans_rel_agg)
-            
-            ans_vector=self._encode_prompt(self.hr_bert,
-                                          input_emb=input_emb,
-                                          token_ids=ans_head_token_ids,
-                                          mask=ans_head_mask,
-                                          token_type_ids=ans_head_token_type_ids)
-            
-            ans_emb=self.gate_fusion(ans_vector,hr_vector)
-
-
-
-        
-
+            ans_rel_agg=ans_rel_agg.float()
+            analogical_prompt=self.prompter(ans_rel_agg)
+            ans_emb=self._encode_an(self.hr_bert, token_ids=head_token_ids, mask=head_mask, token_type_ids=head_token_type_ids, input_emb=analogical_prompt)
 
         return {
             'hr_vector':  hr_vector,
             'tail_vector': tail_vector,
             'ans_rel':ans_rel_agg if args.ans>0 else None,
-            'ans_vector':ans_vector  if args.ans>0 else None,
             'ans_emb':ans_emb if args.ans>0 else None
 
         }
@@ -201,15 +155,11 @@ class CustomBertModel(nn.Module, ABC):
         batch_size = hr_vector.size(0)
         labels = torch.arange(batch_size).to(hr_vector.device)
         if args.ans>0:
-            ans_rel=output_dict['ans_rel']
             ans_vector=output_dict['ans_emb']
-            rel_labels=batch_dict['rel_idx'].to(labels.dtype).cuda()
-            rel_logits=self.classfier(ans_rel)
             ans_t=ans_vector @ tail_vector.t()
         
         
         hr_t=hr_vector @ tail_vector.t()
-        
 
         if self.training:
             hr_t= hr_t - torch.zeros(hr_t.size()).fill_diagonal_(self.add_margin).to(
@@ -224,15 +174,15 @@ class CustomBertModel(nn.Module, ABC):
         triplet_mask_hr_t = batch_dict.get('triplet_mask', None).to(hr_vector.device)
         hr_t.masked_fill_(~triplet_mask_hr_t, -1e4)
         loss_fn = nn.CrossEntropyLoss().cuda()
+        lm_loss=0
+        ans_loss=0
         loss=0
+    
+        ans_t.masked_fill_(~triplet_mask_hr_t, -1e4)
+        ans_loss= self.args.lmd*loss_fn(torch.cat([ans_t],dim=1), labels) + loss_fn(ans_t.t(), labels)
         
-        if self.args.ans>0:
-            ans_t.masked_fill_(~triplet_mask_hr_t, -1e4)
-            rel_loss=loss_fn(rel_logits, rel_labels) 
-            loss= loss_fn(torch.cat([ans_t],dim=1), labels) + loss_fn(ans_t.t(), labels)+rel_loss
-        else:
-            lm_loss= loss_fn(hr_t, labels) + loss_fn(hr_t.t(), labels)
-            loss=lm_loss
+        lm_loss= loss_fn(hr_t, labels) + loss_fn(hr_t.t(), labels)
+        loss=lm_loss+ans_loss
         
         return {'hr_logits': hr_t,
                 'labels': labels.long(),

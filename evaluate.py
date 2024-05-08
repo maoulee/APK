@@ -46,6 +46,7 @@ def compute_metrics(predictor: BertPredictor,hr_dict: dict,
                     examples: List[Example],
                     k=3, batch_size=128) -> Tuple:
     hr_tensor=hr_dict['hr_tensor']
+    hr_ans=hr_dict['hr_ans']
     #hr_ans=hr_dict['hr_ans']
     entities_tensor=ent_dict['ent_tensor']
     assert hr_tensor.size(1) == entities_tensor.size(1)
@@ -62,12 +63,13 @@ def compute_metrics(predictor: BertPredictor,hr_dict: dict,
         end = start + batch_size
         # batch_size * entity_cnt
         batch_score_lm = torch.mm(hr_tensor[start:end, :], entities_tensor.t())
-        #batch_score_ans = torch.mm(hr_ans[start:end, :], entities_tensor.t())
-        batch_score=batch_score_lm
+        batch_score_ans = torch.mm(hr_ans[start:end, :], entities_tensor.t())
+        batch_score=batch_score_lm+0.3*batch_score_ans
         assert entity_cnt == batch_score.size(1)
         batch_target = target[start:end]
 
-        # re-ranking based on analogical examples
+        # re-ranking based on topological structure
+        #if args.ans>0:
         rerank_by_ans(batch_score, examples[start:end], entity_dict=entity_dict)
 
         # filter known triplets
@@ -75,14 +77,12 @@ def compute_metrics(predictor: BertPredictor,hr_dict: dict,
             mask_indices = []
             cur_ex = examples[start + idx]
             gold_neighbor_ids = all_triplet_dict.get_neighbors(cur_ex.head_id, cur_ex.relation)
-       
             if len(gold_neighbor_ids) > 10000:
                 logger.debug('{} - {} has {} neighbors'.format(cur_ex.head_id, cur_ex.relation, len(gold_neighbor_ids)))
             for e_id in gold_neighbor_ids:
                 if e_id == cur_ex.tail_id:
                     continue
                 mask_indices.append(entity_dict.entity_to_idx(e_id))
-                
             mask_indices = torch.LongTensor(mask_indices).to(batch_score.device)
             batch_score[idx].index_fill_(0, mask_indices, -1)
 
@@ -147,18 +147,19 @@ def eval_single_direction(predictor: BertPredictor,
     start_time = time()
     examples = load_data(args.valid_path, add_forward_triplet=eval_forward, add_backward_triplet=not eval_forward)
     #hr_tensor = predictor.predict_by_examples(examples)
-    hr_tensor = predictor.predict_by_gate_examples(examples)
-    #hr_tensor,hr_ans = predictor.predict_by_ans_examples(examples)
+    #hr_tensor = predictor.predict_by_gate_examples(examples)
+    hr_tensor,hr_ans = predictor.predict_by_ans_examples(examples)
     hr_dict={}
-    '''
+    
     hr_dict={
         'hr_tensor':hr_tensor,
         'hr_ans':hr_ans
     }
     '''
     hr_dict={
-        'hr_tensor':hr_tensor,
+        'hr_tensor':hr_ans,
     }
+    '''
     target = [entity_dict.entity_to_idx(ex.tail_id) for ex in examples]
     logger.info('predict tensor done, compute metrics...')
 

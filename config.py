@@ -86,6 +86,8 @@ parser.add_argument('--ans', default=1, type=int,
                     help='the number of analogical examples')
 parser.add_argument('--max_dis', default=10, type=int,
                     metavar='N')
+parser.add_argument('--lmd', default=0.3, type=float,
+                    metavar='N')
 
 
 args = parser.parse_args()

@@ -33,4 +33,6 @@ python3 -u main.py \
 --finetune-t \
 --epochs 10 \
 --workers 4 \
+--lmd 0.3 \
+--ans 2 \
 --max-to-keep 3 "$@"

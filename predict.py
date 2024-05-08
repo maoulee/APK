@@ -82,6 +82,28 @@ class BertPredictor:
         return torch.cat(hr_tensor_list, dim=0)
     
     @torch.no_grad()
+    def predict_by_ans_examples(self, examples: List[Example]):
+        data_loader = torch.utils.data.DataLoader(
+            Dataset(path='', examples=examples,task=args.task),
+            num_workers=1,
+            batch_size=max(args.batch_size, 512),
+            collate_fn=collate,
+            shuffle=False)
+
+        hr_tensor_list= []
+        hr_ans_list=[]
+        for idx, batch_dict in enumerate(tqdm.tqdm(data_loader)):
+            if self.use_cuda:
+                batch_dict = move_to_cuda(batch_dict)
+            outputs = self.model(**batch_dict)
+            hr_tensor_list.append(outputs['hr_vector'])
+            hr_ans_list.append(outputs['ans_emb'])
+            
+        hr_tensor=torch.cat(hr_tensor_list, dim=0)
+        hr_ans=torch.cat(hr_ans_list, dim=0)
+        return hr_tensor,hr_ans
+    
+    @torch.no_grad()
     def predict_by_gate_examples(self, examples: List[Example]):
         data_loader = torch.utils.data.DataLoader(
             Dataset(path='', examples=examples,task=args.task),
@@ -103,7 +125,7 @@ class BertPredictor:
     
    
     @torch.no_grad()
-    def predict_by_entities(self, entity_exs) -> torch.tensor:
+    def predict_by_entities(self, entity_exs,forward=True) -> torch.tensor:
         examples = []
         for entity_ex in entity_exs:
             examples.append(Example(head_id='', relation='',tail_id=entity_ex.entity_id))

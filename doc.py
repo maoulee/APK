@@ -8,7 +8,7 @@ import random
 import pdb
 from config import args
 from triplet import reverse_triplet
-from triplet_mask import construct_mask, construct_self_ans_mask, construct_mask_backward, entity_dict, train_triplet_dict
+from triplet_mask import construct_mask, train_triplet_dict,entity_dict
 from dict_hub import get_link_graph, get_tokenizer
 from logger_config import logger
 

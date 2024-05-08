@@ -35,4 +35,5 @@ python3 -u main.py \
 --workers 4 \
 --seed 1024 \
 --ans 2 \
---max-to-keep 3 "$@"
+--lmd 0.3 \
+--max-to-keep 1 "$@"
